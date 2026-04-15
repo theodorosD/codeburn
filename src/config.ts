@@ -7,6 +7,7 @@ export type CodeburnConfig = {
     code: string
     symbol?: string
   }
+  hiddenPanels?: string[]
 }
 
 function getConfigDir(): string {

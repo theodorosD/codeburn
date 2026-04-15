@@ -7,6 +7,7 @@ import { formatCost, formatTokens } from './format.js'
 import { parseAllSessions } from './parser.js'
 import { loadPricing } from './models.js'
 import { getAllProviders } from './providers/index.js'
+import { readConfig, saveConfig } from './config.js'
 
 type Period = 'today' | 'week' | '30days' | 'month'
 
@@ -42,6 +43,27 @@ const PANEL_COLORS = {
   tools: '#5BF5E0',
   mcp: '#F55BE0',
   bash: '#F5A05B',
+}
+
+// Panel IDs and their toggle keys
+const PANEL_KEYS: Record<string, string> = {
+  daily: 'd',
+  project: 'j',
+  activity: 'a',
+  model: 'm',
+  tools: 't',
+  bash: 'b',
+  mcp: 'c',
+}
+
+const PANEL_KEY_LABELS: Record<string, string> = {
+  daily: 'Daily Activity',
+  project: 'By Project',
+  activity: 'By Activity',
+  model: 'By Model',
+  tools: 'Core Tools / Languages',
+  bash: 'Shell Commands',
+  mcp: 'MCP Servers',
 }
 
 const PROVIDER_COLORS: Record<string, string> = {
@@ -485,7 +507,26 @@ function StatusBar({ width, showProvider }: { width: number; showProvider?: bool
             <Text dimColor> provider</Text>
           </>
         )}
+        <Text dimColor>   </Text>
+        <Text color={ORANGE} bold>?</Text>
+        <Text dimColor> panels</Text>
       </Text>
+    </Box>
+  )
+}
+
+function HelpOverlay({ width, hidden }: { width: number; hidden: Set<string> }) {
+  return (
+    <Box borderStyle="round" borderColor={ORANGE} width={width} flexDirection="column" paddingX={1}>
+      <Text bold color={ORANGE}>Panel Shortcuts  <Text dimColor>(press ? to close)</Text></Text>
+      {Object.entries(PANEL_KEYS).map(([id, key]) => (
+        <Text key={id}>
+          <Text bold color={ORANGE}>{key}</Text>
+          <Text dimColor>  {hidden.has(id) ? '○ hidden  ' : '● visible '}</Text>
+          <Text>{PANEL_KEY_LABELS[id]}</Text>
+        </Text>
+      ))}
+      <Text dimColor>Layout is saved automatically.</Text>
     </Box>
   )
 }
@@ -495,9 +536,11 @@ function Row({ wide, width, children }: { wide: boolean; width: number; children
   return <>{children}</>
 }
 
-function DashboardContent({ projects, period, columns, activeProvider }: { projects: ProjectSummary[]; period: Period; columns?: number; activeProvider?: string }) {
+function DashboardContent({ projects, period, columns, activeProvider, hidden }: { projects: ProjectSummary[]; period: Period; columns?: number; activeProvider?: string; hidden?: Set<string> }) {
   const { dashWidth, wide, halfWidth, barWidth } = getLayout(columns)
   const isCursor = activeProvider === 'cursor'
+  const vis = hidden ?? new Set<string>()
+  const show = (id: string) => !vis.has(id)
 
   if (projects.length === 0) {
     return (
@@ -514,25 +557,31 @@ function DashboardContent({ projects, period, columns, activeProvider }: { proje
     <Box flexDirection="column" width={dashWidth}>
       <Overview projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} />
 
-      <Row wide={wide} width={dashWidth}>
-        <DailyActivity projects={projects} days={days} pw={pw} bw={barWidth} />
-        <ProjectBreakdown projects={projects} pw={pw} bw={barWidth} />
-      </Row>
+      {(show('daily') || show('project')) && (
+        <Row wide={wide} width={dashWidth}>
+          {show('daily') && <DailyActivity projects={projects} days={days} pw={pw} bw={barWidth} />}
+          {show('project') && <ProjectBreakdown projects={projects} pw={pw} bw={barWidth} />}
+        </Row>
+      )}
 
-      <Row wide={wide} width={dashWidth}>
-        <ActivityBreakdown projects={projects} pw={pw} bw={barWidth} />
-        <ModelBreakdown projects={projects} pw={pw} bw={barWidth} />
-      </Row>
+      {(show('activity') || show('model')) && (
+        <Row wide={wide} width={dashWidth}>
+          {show('activity') && <ActivityBreakdown projects={projects} pw={pw} bw={barWidth} />}
+          {show('model') && <ModelBreakdown projects={projects} pw={pw} bw={barWidth} />}
+        </Row>
+      )}
 
       {isCursor ? (
-        <ToolBreakdown projects={projects} pw={dashWidth} bw={barWidth} title="Languages" filterPrefix="lang:" />
+        show('tools') && <ToolBreakdown projects={projects} pw={dashWidth} bw={barWidth} title="Languages" filterPrefix="lang:" />
       ) : (
         <>
-          <Row wide={wide} width={dashWidth}>
-            <ToolBreakdown projects={projects} pw={pw} bw={barWidth} />
-            <BashBreakdown projects={projects} pw={pw} bw={barWidth} />
-          </Row>
-          <McpBreakdown projects={projects} pw={dashWidth} bw={barWidth} />
+          {(show('tools') || show('bash')) && (
+            <Row wide={wide} width={dashWidth}>
+              {show('tools') && <ToolBreakdown projects={projects} pw={pw} bw={barWidth} />}
+              {show('bash') && <BashBreakdown projects={projects} pw={pw} bw={barWidth} />}
+            </Row>
+          )}
+          {show('mcp') && <McpBreakdown projects={projects} pw={dashWidth} bw={barWidth} />}
         </>
       )}
     </Box>
@@ -551,9 +600,18 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   const [loading, setLoading] = useState(false)
   const [activeProvider, setActiveProvider] = useState(initialProvider)
   const [detectedProviders, setDetectedProviders] = useState<string[]>([])
+  const [hiddenPanels, setHiddenPanels] = useState<Set<string>>(new Set())
+  const [showHelp, setShowHelp] = useState(false)
   const { columns } = useWindowSize()
   const { dashWidth } = getLayout(columns)
   const multipleProviders = detectedProviders.length > 1
+
+  // Load saved hidden panels from config
+  useEffect(() => {
+    readConfig().then(cfg => {
+      if (cfg.hiddenPanels?.length) setHiddenPanels(new Set(cfg.hiddenPanels))
+    })
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -564,9 +622,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
         const sessions = await p.discoverSessions()
         if (sessions.length > 0) found.push(p.name)
       }
-      if (!cancelled) {
-        setDetectedProviders(found)
-      }
+      if (!cancelled) setDetectedProviders(found)
     }
     detect()
     return () => { cancelled = true }
@@ -605,8 +661,20 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   }, [period, activeProvider, reloadData])
 
   useInput((input, key) => {
-    if (input === 'q') {
-      exit()
+    if (input === 'q') { exit(); return }
+
+    if (input === '?') { setShowHelp(h => !h); return }
+
+    // Panel toggle keys
+    const panelId = Object.entries(PANEL_KEYS).find(([, k]) => k === input)?.[0]
+    if (panelId) {
+      setHiddenPanels(prev => {
+        const next = new Set(prev)
+        if (next.has(panelId)) next.delete(panelId)
+        else next.add(panelId)
+        readConfig().then(cfg => saveConfig({ ...cfg, hiddenPanels: [...next] }))
+        return next
+      })
       return
     }
 
@@ -621,11 +689,9 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     }
 
     const idx = PERIODS.indexOf(period)
-    if (key.leftArrow) {
-      switchPeriod(PERIODS[(idx - 1 + PERIODS.length) % PERIODS.length])
-    } else if (key.rightArrow || key.tab) {
-      switchPeriod(PERIODS[(idx + 1) % PERIODS.length])
-    } else if (input === '1') switchPeriodImmediate('today')
+    if (key.leftArrow) switchPeriod(PERIODS[(idx - 1 + PERIODS.length) % PERIODS.length])
+    else if (key.rightArrow || key.tab) switchPeriod(PERIODS[(idx + 1) % PERIODS.length])
+    else if (input === '1') switchPeriodImmediate('today')
     else if (input === '2') switchPeriodImmediate('week')
     else if (input === '3') switchPeriodImmediate('30days')
     else if (input === '4') switchPeriodImmediate('month')
@@ -646,7 +712,10 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   return (
     <Box flexDirection="column" width={dashWidth}>
       <PeriodTabs active={period} providerName={activeProvider} showProvider={multipleProviders} />
-      <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} />
+      {showHelp
+        ? <HelpOverlay width={dashWidth} hidden={hiddenPanels} />
+        : <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} hidden={hiddenPanels} />
+      }
       <StatusBar width={dashWidth} showProvider={multipleProviders} />
     </Box>
   )
