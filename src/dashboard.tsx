@@ -525,6 +525,39 @@ function HourlyHeatmap({ projects, pw }: { projects: ProjectSummary[]; pw: numbe
   )
 }
 
+function WeekdayBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
+  const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  const dayCalls = new Array<number>(7).fill(0)
+  const dayCost = new Array<number>(7).fill(0)
+
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      for (const turn of session.turns) {
+        if (!turn.timestamp) continue
+        const d = new Date(turn.timestamp).getDay()
+        dayCalls[d] += turn.assistantCalls.length
+        dayCost[d] += turn.assistantCalls.reduce((s, c) => s + c.costUSD, 0)
+      }
+    }
+  }
+
+  const maxCost = Math.max(...dayCost, 0.000001)
+
+  return (
+    <Panel title="By Weekday" color={PANEL_COLORS.project} width={pw}>
+      <Text dimColor wrap="truncate-end">{''.padEnd(bw + 5)}{'cost'.padStart(8)}{'calls'.padStart(6)}</Text>
+      {DAY_NAMES.map((name, d) => (
+        <Text key={name} wrap="truncate-end">
+          <Text dimColor>{name} </Text>
+          <HBar value={dayCost[d]!} max={maxCost} width={bw} />
+          <Text color={GOLD}>{formatCost(dayCost[d]!).padStart(8)}</Text>
+          <Text>{String(dayCalls[d]!).padStart(6)}</Text>
+        </Text>
+      ))}
+    </Panel>
+  )
+}
+
 function DashboardContent({ projects, period, columns, activeProvider }: { projects: ProjectSummary[]; period: Period; columns?: number; activeProvider?: string }) {
   const { dashWidth, wide, halfWidth, barWidth } = getLayout(columns)
   const isCursor = activeProvider === 'cursor'
@@ -549,7 +582,10 @@ function DashboardContent({ projects, period, columns, activeProvider }: { proje
         <ProjectBreakdown projects={projects} pw={pw} bw={barWidth} />
       </Row>
 
-      <HourlyHeatmap projects={projects} pw={dashWidth} />
+      <Row wide={wide} width={dashWidth}>
+        <HourlyHeatmap projects={projects} pw={pw} />
+        <WeekdayBreakdown projects={projects} pw={pw} bw={barWidth} />
+      </Row>
 
       <Row wide={wide} width={dashWidth}>
         <ActivityBreakdown projects={projects} pw={pw} bw={barWidth} />
