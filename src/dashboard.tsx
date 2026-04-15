@@ -471,9 +471,7 @@ function StatusBar({ width, showProvider }: { width: number; showProvider?: bool
         )}
         <Text dimColor>   </Text>
         <Text color={theme.accent} bold>T</Text>
-        <Text dimColor> theme   </Text>
-        <Text color={theme.accent} bold>?</Text>
-        <Text dimColor> panels</Text>
+        <Text dimColor> theme</Text>
       </Text>
     </Box>
   )
