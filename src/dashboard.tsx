@@ -477,6 +477,54 @@ function Row({ wide, width, children }: { wide: boolean; width: number; children
   return <>{children}</>
 }
 
+function HourlyHeatmap({ projects, pw }: { projects: ProjectSummary[]; pw: number }) {
+  // Count calls per hour (0-23)
+  const hourCalls = new Array<number>(24).fill(0)
+  const hourCost = new Array<number>(24).fill(0)
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      for (const turn of session.turns) {
+        if (!turn.timestamp) continue
+        const h = new Date(turn.timestamp).getHours()
+        hourCalls[h] += turn.assistantCalls.length
+        hourCost[h] += turn.assistantCalls.reduce((s, c) => s + c.costUSD, 0)
+      }
+    }
+  }
+
+  const maxCalls = Math.max(...hourCalls, 1)
+  const BLOCKS = ['░', '▒', '▓', '█']
+
+  // Render two rows: AM (0-11) and PM (12-23), each block padded to 2 chars for alignment
+  function renderRow(hours: number[]) {
+    return hours.map(h => {
+      const intensity = hourCalls[h]! / maxCalls
+      const block = intensity === 0 ? ' ·' : ` ${BLOCKS[Math.min(3, Math.floor(intensity * 4))]!}`
+      const color = intensity === 0 ? DIM : gradientColor(intensity)
+      return <Text key={h} color={color}>{block}</Text>
+    })
+  }
+
+  const am = Array.from({ length: 12 }, (_, i) => i)
+  const pm = Array.from({ length: 12 }, (_, i) => i + 12)
+  const totalCalls = hourCalls.reduce((s, v) => s + v, 0)
+  const peakHour = hourCalls.indexOf(maxCalls)
+
+  return (
+    <Panel title="Hourly Activity" color={PANEL_COLORS.daily} width={pw}>
+      <Text dimColor>  {am.map(h => String(h).padStart(2)).join(' ')}</Text>
+      <Text>AM  {renderRow(am)}</Text>
+      <Text>PM  {renderRow(pm)}</Text>
+      <Text dimColor>  {pm.map(h => String(h).padStart(2)).join(' ')}</Text>
+      <Text dimColor>
+        {totalCalls > 0
+          ? `peak ${peakHour}:00  ·  ${BLOCKS[0]} low  ${BLOCKS[1]} med  ${BLOCKS[2]} high  ${BLOCKS[3]} peak`
+          : 'no activity'}
+      </Text>
+    </Panel>
+  )
+}
+
 function DashboardContent({ projects, period, columns, activeProvider }: { projects: ProjectSummary[]; period: Period; columns?: number; activeProvider?: string }) {
   const { dashWidth, wide, halfWidth, barWidth } = getLayout(columns)
   const isCursor = activeProvider === 'cursor'
@@ -500,6 +548,8 @@ function DashboardContent({ projects, period, columns, activeProvider }: { proje
         <DailyActivity projects={projects} days={days} pw={pw} bw={barWidth} />
         <ProjectBreakdown projects={projects} pw={pw} bw={barWidth} />
       </Row>
+
+      <HourlyHeatmap projects={projects} pw={dashWidth} />
 
       <Row wide={wide} width={dashWidth}>
         <ActivityBreakdown projects={projects} pw={pw} bw={barWidth} />
