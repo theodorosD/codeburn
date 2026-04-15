@@ -7,6 +7,8 @@ import { formatCost, formatTokens } from './format.js'
 import { parseAllSessions } from './parser.js'
 import { loadPricing } from './models.js'
 import { getAllProviders } from './providers/index.js'
+import { readConfig, saveConfig } from './config.js'
+import { getTheme, nextTheme, DEFAULT_THEME, type Theme } from './themes.js'
 
 type Period = 'today' | 'week' | '30days' | 'month'
 
@@ -19,9 +21,9 @@ const PERIOD_LABELS: Record<Period, string> = {
 }
 
 const MIN_WIDE = 90
-const ORANGE = '#FF8C42'
-const DIM = '#555555'
-const GOLD = '#FFD700'
+
+// Theme context — avoids threading theme through every prop
+const ThemeContext = React.createContext<Theme>(getTheme(DEFAULT_THEME))
 
 const LANG_DISPLAY_NAMES: Record<string, string> = {
   javascript: 'JavaScript', typescript: 'TypeScript', python: 'Python',
@@ -31,17 +33,6 @@ const LANG_DISPLAY_NAMES: Record<string, string> = {
   sql: 'SQL', shell: 'Shell', shellscript: 'Shell Script', bash: 'Bash',
   typescriptreact: 'TSX', javascriptreact: 'JSX',
   markdown: 'Markdown', dockerfile: 'Dockerfile', toml: 'TOML',
-}
-
-const PANEL_COLORS = {
-  overview: '#FF8C42',
-  daily: '#5B9EF5',
-  project: '#5BF5A0',
-  model: '#E05BF5',
-  activity: '#F5C85B',
-  tools: '#5BF5E0',
-  mcp: '#F55BE0',
-  bash: '#F5A05B',
 }
 
 const PROVIDER_COLORS: Record<string, string> = {
@@ -69,28 +60,6 @@ const CATEGORY_COLORS: Record<TaskCategory, string> = {
   general: '#666666',
 }
 
-function toHex(r: number, g: number, b: number): string {
-  return '#' + [r, g, b].map(v => Math.round(v).toString(16).padStart(2, '0')).join('')
-}
-
-function lerp(a: number, b: number, t: number): number {
-  return a + t * (b - a)
-}
-
-// Blue -> amber -> orange gradient across the bar width
-function gradientColor(pct: number): string {
-  if (pct <= 0.33) {
-    const t = pct / 0.33
-    return toHex(lerp(91, 245, t), lerp(158, 200, t), lerp(245, 91, t))
-  }
-  if (pct <= 0.66) {
-    const t = (pct - 0.33) / 0.33
-    return toHex(lerp(245, 255, t), lerp(200, 140, t), lerp(91, 66, t))
-  }
-  const t = (pct - 0.66) / 0.34
-  return toHex(lerp(255, 245, t), lerp(140, 91, t), lerp(66, 91, t))
-}
-
 function getDateRange(period: Period): { start: Date; end: Date } {
   const now = new Date()
   const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
@@ -115,11 +84,12 @@ function getLayout(columns?: number): Layout {
 }
 
 function HBar({ value, max, width }: { value: number; max: number; width: number }) {
-  if (max === 0) return <Text color={DIM}>{'░'.repeat(width)}</Text>
+  const theme = React.useContext(ThemeContext)
+  if (max === 0) return <Text color={theme.dim}>{'░'.repeat(width)}</Text>
   const filled = Math.round((value / max) * width)
   const fillChars: React.ReactNode[] = []
   for (let i = 0; i < Math.min(filled, width); i++) {
-    fillChars.push(<Text key={i} color={gradientColor(i / width)}>{'█'}</Text>)
+    fillChars.push(<Text key={i} color={theme.gradientFn(i / width)}>{'█'}</Text>)
   }
   return (
     <Text>
@@ -143,6 +113,7 @@ function fit(s: string, n: number): string {
 }
 
 function Overview({ projects, label, width }: { projects: ProjectSummary[]; label: string; width: number }) {
+  const theme = React.useContext(ThemeContext)
   const totalCost = projects.reduce((s, p) => s + p.totalCostUSD, 0)
   const totalCalls = projects.reduce((s, p) => s + p.totalApiCalls, 0)
   const totalSessions = projects.reduce((s, p) => s + p.sessions.length, 0)
@@ -156,13 +127,13 @@ function Overview({ projects, label, width }: { projects: ProjectSummary[]; labe
     ? (totalCacheRead / allInputTokens) * 100 : 0
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={PANEL_COLORS.overview} paddingX={1} width={width}>
+    <Box flexDirection="column" borderStyle="round" borderColor={theme.panelColors.overview} paddingX={1} width={width}>
       <Text wrap="truncate-end">
-        <Text bold color={ORANGE}>CodeBurn</Text>
+        <Text bold color={theme.accent}>CodeBurn</Text>
         <Text dimColor>  {label}</Text>
       </Text>
       <Text wrap="truncate-end">
-        <Text bold color={GOLD}>{formatCost(totalCost)}</Text>
+        <Text bold color={theme.gold}>{formatCost(totalCost)}</Text>
         <Text dimColor> cost   </Text>
         <Text bold>{totalCalls.toLocaleString()}</Text>
         <Text dimColor> calls   </Text>
@@ -179,6 +150,7 @@ function Overview({ projects, label, width }: { projects: ProjectSummary[]; labe
 }
 
 function DailyActivity({ projects, days = 14, pw, bw }: { projects: ProjectSummary[]; days?: number; pw: number; bw: number }) {
+  const theme = React.useContext(ThemeContext)
   const dailyCosts: Record<string, number> = {}
   const dailyCalls: Record<string, number> = {}
   for (const project of projects) {
@@ -195,13 +167,13 @@ function DailyActivity({ projects, days = 14, pw, bw }: { projects: ProjectSumma
   const maxCost = Math.max(...sortedDays.map(d => dailyCosts[d] ?? 0))
 
   return (
-    <Panel title="Daily Activity" color={PANEL_COLORS.daily} width={pw}>
+    <Panel title="Daily Activity" color={theme.panelColors.daily} width={pw}>
       <Text dimColor wrap="truncate-end">{''.padEnd(6 + bw)}{'cost'.padStart(8)}{'calls'.padStart(6)}</Text>
       {sortedDays.map(day => (
         <Text key={day} wrap="truncate-end">
           <Text dimColor>{day.slice(5)} </Text>
           <HBar value={dailyCosts[day] ?? 0} max={maxCost} width={bw} />
-          <Text color={GOLD}>{formatCost(dailyCosts[day] ?? 0).padStart(8)}</Text>
+          <Text color={theme.gold}>{formatCost(dailyCosts[day] ?? 0).padStart(8)}</Text>
           <Text>{String(dailyCalls[day] ?? 0).padStart(6)}</Text>
         </Text>
       ))}
@@ -231,16 +203,17 @@ function shortProject(encoded: string): string {
 }
 
 function ProjectBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
+  const theme = React.useContext(ThemeContext)
   const maxCost = Math.max(...projects.map(p => p.totalCostUSD))
   const nw = Math.max(8, pw - bw - 23)
   return (
-    <Panel title="By Project" color={PANEL_COLORS.project} width={pw}>
+    <Panel title="By Project" color={theme.panelColors.project} width={pw}>
       <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + nw)}{'cost'.padStart(8)}{'sess'.padStart(6)}</Text>
       {projects.slice(0, 8).map((project, i) => (
         <Text key={`${project.project}-${i}`} wrap="truncate-end">
           <HBar value={project.totalCostUSD} max={maxCost} width={bw} />
           <Text dimColor> {fit(shortProject(project.project), nw)}</Text>
-          <Text color={GOLD}>{formatCost(project.totalCostUSD).padStart(8)}</Text>
+          <Text color={theme.gold}>{formatCost(project.totalCostUSD).padStart(8)}</Text>
           <Text>{String(project.sessions.length).padStart(6)}</Text>
         </Text>
       ))}
@@ -254,6 +227,7 @@ const MODEL_COL_CALLS = 7
 const MODEL_NAME_WIDTH = 14
 
 function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
+  const theme = React.useContext(ThemeContext)
   const modelTotals: Record<string, { calls: number; costUSD: number; freshInput: number; cacheRead: number; cacheWrite: number }> = {}
   for (const project of projects) {
     for (const session of project.sessions) {
@@ -271,7 +245,7 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
   const maxCost = sorted[0]?.[1]?.costUSD ?? 0
 
   return (
-    <Panel title="By Model" color={PANEL_COLORS.model} width={pw}>
+    <Panel title="By Model" color={theme.panelColors.model} width={pw}>
       <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + MODEL_NAME_WIDTH)}{'cost'.padStart(MODEL_COL_COST)}{'cache'.padStart(MODEL_COL_CACHE)}{'calls'.padStart(MODEL_COL_CALLS)}</Text>
       {sorted.map(([model, data], i) => {
         const totalInput = data.freshInput + data.cacheRead + data.cacheWrite
@@ -281,7 +255,7 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
           <Text key={`${model}-${i}`} wrap="truncate-end">
             <HBar value={data.costUSD} max={maxCost} width={bw} />
             <Text> {fit(model, MODEL_NAME_WIDTH)}</Text>
-            <Text color={GOLD}>{formatCost(data.costUSD).padStart(MODEL_COL_COST)}</Text>
+            <Text color={theme.gold}>{formatCost(data.costUSD).padStart(MODEL_COL_COST)}</Text>
             <Text>{cacheLabel.padStart(MODEL_COL_CACHE)}</Text>
             <Text>{String(data.calls).padStart(MODEL_COL_CALLS)}</Text>
           </Text>
@@ -292,6 +266,7 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
 }
 
 function ActivityBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
+  const theme = React.useContext(ThemeContext)
   const categoryTotals: Record<string, { turns: number; costUSD: number; editTurns: number; oneShotTurns: number }> = {}
   for (const project of projects) {
     for (const session of project.sessions) {
@@ -308,7 +283,7 @@ function ActivityBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; p
   const maxCost = sorted[0]?.[1]?.costUSD ?? 0
 
   return (
-    <Panel title="By Activity" color={PANEL_COLORS.activity} width={pw}>
+    <Panel title="By Activity" color={theme.panelColors.activity} width={pw}>
       <Text dimColor wrap="truncate-end">{''.padEnd(bw + 14)}{'cost'.padStart(8)}{'turns'.padStart(6)}{'1-shot'.padStart(7)}</Text>
       {sorted.map(([cat, data]) => {
         const oneShotPct = data.editTurns > 0 ? Math.round((data.oneShotTurns / data.editTurns) * 100) + '%' : '-'
@@ -318,9 +293,9 @@ function ActivityBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; p
             <Text color={CATEGORY_COLORS[cat as TaskCategory] ?? '#666666'}>
               {' '}{fit(CATEGORY_LABELS[cat as TaskCategory] ?? cat, 13)}
             </Text>
-            <Text color={GOLD}>{formatCost(data.costUSD).padStart(8)}</Text>
+            <Text color={theme.gold}>{formatCost(data.costUSD).padStart(8)}</Text>
             <Text>{String(data.turns).padStart(6)}</Text>
-            <Text color={data.editTurns === 0 ? DIM : oneShotPct === '100%' ? '#5BF58C' : ORANGE}>{String(oneShotPct).padStart(7)}</Text>
+            <Text color={data.editTurns === 0 ? theme.dim : oneShotPct === '100%' ? '#5BF58C' : theme.accent}>{String(oneShotPct).padStart(7)}</Text>
           </Text>
         )
       })}
@@ -329,6 +304,7 @@ function ActivityBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; p
 }
 
 function ToolBreakdown({ projects, pw, bw, title, filterPrefix }: { projects: ProjectSummary[]; pw: number; bw: number; title?: string; filterPrefix?: string }) {
+  const theme = React.useContext(ThemeContext)
   const toolTotals: Record<string, number> = {}
   for (const project of projects) {
     for (const session of project.sessions) {
@@ -347,7 +323,7 @@ function ToolBreakdown({ projects, pw, bw, title, filterPrefix }: { projects: Pr
   const nw = Math.max(6, pw - bw - 15)
 
   return (
-    <Panel title={title ?? 'Core Tools'} color={PANEL_COLORS.tools} width={pw}>
+    <Panel title={title ?? 'Core Tools'} color={theme.panelColors.tools} width={pw}>
       <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + nw)}{'calls'.padStart(7)}</Text>
       {sorted.slice(0, 10).map(([tool, calls]) => {
         const raw = filterPrefix ? tool.slice(filterPrefix.length) : tool
@@ -365,6 +341,7 @@ function ToolBreakdown({ projects, pw, bw, title, filterPrefix }: { projects: Pr
 }
 
 function McpBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
+  const theme = React.useContext(ThemeContext)
   const mcpTotals: Record<string, number> = {}
   for (const project of projects) {
     for (const session of project.sessions) {
@@ -375,13 +352,13 @@ function McpBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: nu
   }
   const sorted = Object.entries(mcpTotals).sort(([, a], [, b]) => b - a)
   if (sorted.length === 0) {
-    return <Panel title="MCP Servers" color={PANEL_COLORS.mcp} width={pw}><Text dimColor>No MCP usage</Text></Panel>
+    return <Panel title="MCP Servers" color={theme.panelColors.mcp} width={pw}><Text dimColor>No MCP usage</Text></Panel>
   }
   const maxCalls = sorted[0]?.[1] ?? 0
   const nw = Math.max(6, pw - bw - 15)
 
   return (
-    <Panel title="MCP Servers" color={PANEL_COLORS.mcp} width={pw}>
+    <Panel title="MCP Servers" color={theme.panelColors.mcp} width={pw}>
       <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + nw)}{'calls'.padStart(6)}</Text>
       {sorted.slice(0, 8).map(([server, calls]) => (
         <Text key={server} wrap="truncate-end">
@@ -395,6 +372,7 @@ function McpBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: nu
 }
 
 function BashBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
+  const theme = React.useContext(ThemeContext)
   const bashTotals: Record<string, number> = {}
   for (const project of projects) {
     for (const session of project.sessions) {
@@ -405,13 +383,13 @@ function BashBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: n
   }
   const sorted = Object.entries(bashTotals).sort(([, a], [, b]) => b - a)
   if (sorted.length === 0) {
-    return <Panel title="Shell Commands" color={PANEL_COLORS.bash} width={pw}><Text dimColor>No shell commands</Text></Panel>
+    return <Panel title="Shell Commands" color={theme.panelColors.bash} width={pw}><Text dimColor>No shell commands</Text></Panel>
   }
   const maxCalls = sorted[0]?.[1] ?? 0
   const nw = Math.max(6, pw - bw - 15)
 
   return (
-    <Panel title="Shell Commands" color={PANEL_COLORS.bash} width={pw}>
+    <Panel title="Shell Commands" color={theme.panelColors.bash} width={pw}>
       <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + nw)}{'calls'.padStart(7)}</Text>
       {sorted.slice(0, 10).map(([cmd, calls]) => (
         <Text key={cmd} wrap="truncate-end">
@@ -437,54 +415,65 @@ function getProviderDisplayName(name: string): string {
   return PROVIDER_DISPLAY_NAMES[name] ?? name
 }
 
-function PeriodTabs({ active, providerName, showProvider }: {
+function PeriodTabs({ active, providerName, showProvider, themeName }: {
   active: Period
   providerName?: string
   showProvider?: boolean
+  themeName?: string
 }) {
+  const theme = React.useContext(ThemeContext)
   return (
     <Box justifyContent="space-between" paddingX={1}>
       <Box gap={1}>
         {PERIODS.map(p => (
-          <Text key={p} bold={active === p} color={active === p ? ORANGE : DIM}>
+          <Text key={p} bold={active === p} color={active === p ? theme.accent : theme.dim}>
             {active === p ? `[ ${PERIOD_LABELS[p]} ]` : `  ${PERIOD_LABELS[p]}  `}
           </Text>
         ))}
       </Box>
-      {showProvider && providerName && (
-        <Box>
-          <Text color={DIM}>|  </Text>
-          <Text color={ORANGE} bold>[p]</Text>
-          <Text bold color={PROVIDER_COLORS[providerName] ?? ORANGE}> {getProviderDisplayName(providerName)}</Text>
-        </Box>
-      )}
+      <Box gap={1}>
+        {themeName && <Text dimColor color={theme.dim}>{themeName}</Text>}
+        {showProvider && providerName && (
+          <Box>
+            <Text color={theme.dim}>|  </Text>
+            <Text color={theme.accent} bold>[p]</Text>
+            <Text bold color={PROVIDER_COLORS[providerName] ?? theme.accent}> {getProviderDisplayName(providerName)}</Text>
+          </Box>
+        )}
+      </Box>
     </Box>
   )
 }
 
 function StatusBar({ width, showProvider }: { width: number; showProvider?: boolean }) {
+  const theme = React.useContext(ThemeContext)
   return (
-    <Box borderStyle="round" borderColor={DIM} width={width} justifyContent="center" paddingX={1}>
+    <Box borderStyle="round" borderColor={theme.border} width={width} justifyContent="center" paddingX={1}>
       <Text>
-        <Text color={ORANGE} bold>{'<'}</Text><Text color={ORANGE}>{'>'}</Text>
+        <Text color={theme.accent} bold>{'<'}</Text><Text color={theme.accent}>{'>'}</Text>
         <Text dimColor> switch   </Text>
-        <Text color={ORANGE} bold>q</Text>
+        <Text color={theme.accent} bold>q</Text>
         <Text dimColor> quit   </Text>
-        <Text color={ORANGE} bold>1</Text>
+        <Text color={theme.accent} bold>1</Text>
         <Text dimColor> today   </Text>
-        <Text color={ORANGE} bold>2</Text>
+        <Text color={theme.accent} bold>2</Text>
         <Text dimColor> week   </Text>
-        <Text color={ORANGE} bold>3</Text>
+        <Text color={theme.accent} bold>3</Text>
         <Text dimColor> 30 days   </Text>
-        <Text color={ORANGE} bold>4</Text>
+        <Text color={theme.accent} bold>4</Text>
         <Text dimColor> month</Text>
         {showProvider && (
           <>
             <Text dimColor>   </Text>
-            <Text color={ORANGE} bold>p</Text>
+            <Text color={theme.accent} bold>p</Text>
             <Text dimColor> provider</Text>
           </>
         )}
+        <Text dimColor>   </Text>
+        <Text color={theme.accent} bold>T</Text>
+        <Text dimColor> theme   </Text>
+        <Text color={theme.accent} bold>?</Text>
+        <Text dimColor> panels</Text>
       </Text>
     </Box>
   )
@@ -496,12 +485,13 @@ function Row({ wide, width, children }: { wide: boolean; width: number; children
 }
 
 function DashboardContent({ projects, period, columns, activeProvider }: { projects: ProjectSummary[]; period: Period; columns?: number; activeProvider?: string }) {
+  const theme = React.useContext(ThemeContext)
   const { dashWidth, wide, halfWidth, barWidth } = getLayout(columns)
   const isCursor = activeProvider === 'cursor'
 
   if (projects.length === 0) {
     return (
-      <Panel title="CodeBurn" color={ORANGE} width={dashWidth}>
+      <Panel title="CodeBurn" color={theme.accent} width={dashWidth}>
         <Text dimColor>No usage data found for {PERIOD_LABELS[period]}.</Text>
       </Panel>
     )
@@ -551,9 +541,16 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   const [loading, setLoading] = useState(false)
   const [activeProvider, setActiveProvider] = useState(initialProvider)
   const [detectedProviders, setDetectedProviders] = useState<string[]>([])
+  const [themeName, setThemeName] = useState<string>(DEFAULT_THEME)
   const { columns } = useWindowSize()
   const { dashWidth } = getLayout(columns)
   const multipleProviders = detectedProviders.length > 1
+  const theme = getTheme(themeName)
+
+  // Load saved theme from config
+  useEffect(() => {
+    readConfig().then(cfg => { if (cfg.theme) setThemeName(cfg.theme) })
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -610,6 +607,13 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
       return
     }
 
+    if (input === 'T') {
+      const next = nextTheme(themeName)
+      setThemeName(next)
+      readConfig().then(cfg => saveConfig({ ...cfg, theme: next }))
+      return
+    }
+
     if (input === 'p' && multipleProviders) {
       const options = ['all', ...detectedProviders]
       const idx = options.indexOf(activeProvider)
@@ -633,33 +637,40 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
 
   if (loading) {
     return (
-      <Box flexDirection="column" width={dashWidth}>
-        <PeriodTabs active={period} providerName={activeProvider} showProvider={multipleProviders} />
-        <Panel title="CodeBurn" color={ORANGE} width={dashWidth}>
-          <Text dimColor>Loading {PERIOD_LABELS[period]}...</Text>
-        </Panel>
-        <StatusBar width={dashWidth} showProvider={multipleProviders} />
-      </Box>
+      <ThemeContext.Provider value={theme}>
+        <Box flexDirection="column" width={dashWidth}>
+          <PeriodTabs active={period} providerName={activeProvider} showProvider={multipleProviders} themeName={themeName} />
+          <Panel title="CodeBurn" color={theme.accent} width={dashWidth}>
+            <Text dimColor>Loading {PERIOD_LABELS[period]}...</Text>
+          </Panel>
+          <StatusBar width={dashWidth} showProvider={multipleProviders} />
+        </Box>
+      </ThemeContext.Provider>
     )
   }
 
   return (
-    <Box flexDirection="column" width={dashWidth}>
-      <PeriodTabs active={period} providerName={activeProvider} showProvider={multipleProviders} />
-      <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} />
-      <StatusBar width={dashWidth} showProvider={multipleProviders} />
-    </Box>
+    <ThemeContext.Provider value={theme}>
+      <Box flexDirection="column" width={dashWidth}>
+        <PeriodTabs active={period} providerName={activeProvider} showProvider={multipleProviders} themeName={themeName} />
+        <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} />
+        <StatusBar width={dashWidth} showProvider={multipleProviders} />
+      </Box>
+    </ThemeContext.Provider>
   )
 }
 
-function StaticDashboard({ projects, period, activeProvider }: { projects: ProjectSummary[]; period: Period; activeProvider?: string }) {
+function StaticDashboard({ projects, period, activeProvider, themeName }: { projects: ProjectSummary[]; period: Period; activeProvider?: string; themeName?: string }) {
   const { columns } = useWindowSize()
   const { dashWidth } = getLayout(columns)
+  const theme = getTheme(themeName ?? DEFAULT_THEME)
   return (
-    <Box flexDirection="column" width={dashWidth}>
-      <PeriodTabs active={period} />
-      <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} />
-    </Box>
+    <ThemeContext.Provider value={theme}>
+      <Box flexDirection="column" width={dashWidth}>
+        <PeriodTabs active={period} />
+        <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} />
+      </Box>
+    </ThemeContext.Provider>
   )
 }
 
@@ -667,6 +678,7 @@ export async function renderDashboard(period: Period = 'week', provider: string 
   await loadPricing()
   const range = getDateRange(period)
   const projects = await parseAllSessions(range, provider)
+  const cfg = await readConfig()
 
   const isTTY = process.stdin.isTTY && process.stdout.isTTY
 
@@ -677,7 +689,7 @@ export async function renderDashboard(period: Period = 'week', provider: string 
     await waitUntilExit()
   } else {
     const { unmount } = render(
-      <StaticDashboard projects={projects} period={period} activeProvider={provider} />,
+      <StaticDashboard projects={projects} period={period} activeProvider={provider} themeName={cfg.theme} />,
       { patchConsole: false }
     )
     unmount()

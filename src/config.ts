@@ -7,6 +7,7 @@ export type CodeburnConfig = {
     code: string
     symbol?: string
   }
+  theme?: string
 }
 
 function getConfigDir(): string {

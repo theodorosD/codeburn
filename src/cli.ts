@@ -9,6 +9,7 @@ import { renderDashboard } from './dashboard.js'
 import { getAllProviders } from './providers/index.js'
 import { readConfig, saveConfig, getConfigFilePath } from './config.js'
 import { createRequire } from 'node:module'
+import { THEME_NAMES, DEFAULT_THEME } from './themes.js'
 
 const require = createRequire(import.meta.url)
 const { version } = require('../package.json')
@@ -271,6 +272,40 @@ program
     console.log(`  Symbol: ${symbol}`)
     console.log(`  Rate: 1 USD = ${rate} ${upperCode}`)
     console.log(`  Config saved to ${getConfigFilePath()}\n`)
+  })
+
+program
+  .command('theme [name]')
+  .description(`Set dashboard theme (${THEME_NAMES.join(', ')})`)
+  .option('--reset', 'Reset to default theme (flame)')
+  .action(async (name?: string, opts?: { reset?: boolean }) => {
+    if (opts?.reset) {
+      const config = await readConfig()
+      delete config.theme
+      await saveConfig(config)
+      console.log(`\n  Theme reset to ${DEFAULT_THEME}.\n`)
+      return
+    }
+
+    if (!name) {
+      const config = await readConfig()
+      const active = config.theme ?? DEFAULT_THEME
+      console.log(`\n  Current theme: ${active}`)
+      console.log(`  Available: ${THEME_NAMES.join(', ')}`)
+      console.log(`  Config: ${getConfigFilePath()}\n`)
+      return
+    }
+
+    if (!THEME_NAMES.includes(name)) {
+      console.error(`\n  Unknown theme "${name}". Available: ${THEME_NAMES.join(', ')}\n`)
+      process.exitCode = 1
+      return
+    }
+
+    const config = await readConfig()
+    config.theme = name
+    await saveConfig(config)
+    console.log(`\n  Theme set to ${name}. Config saved to ${getConfigFilePath()}\n`)
   })
 
 program.parse()
